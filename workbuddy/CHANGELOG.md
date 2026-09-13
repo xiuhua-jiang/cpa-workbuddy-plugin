@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.36
+## 0.14.32
 
 ### Fix — 聊天请求补齐官方 X-Conversation-Request-ID
 
@@ -9,15 +9,11 @@
 - 测试：扩展单域及换号重建测试，校验该头格式正确、与 `X-Request-ID` 不同，并在重建请求后仍存在。
 - 说明：后台“请求标识”中的 `crb-` 已确认不是插件生成；本次只补齐官方模型请求头，实际后台显示结果仍需实测确认。
 
-## 0.14.35
-
 ### Fix — 上游请求补齐官方 X-Request-ID
 
 - **根因**：WorkBuddy AI 5.5.2 的 `CommonHeaderHttpInterceptor` 会为每个 HTTP 请求生成 `X-Request-ID`；该值为 UUID 去掉连字符后的 32 位小写十六进制，不是带 `crb-` 前缀的标识。插件此前未发送该头，无法完整对齐官方请求链路。
 - **修复**：`commonHeaders()` 为每次请求注入独立的 `X-Request-ID`；非流式、流式和换号重建请求均会自动获得新值，与官方每个实际 HTTP 请求生成一次客户端请求 ID 的行为一致。
 - 测试：新增 `TestCommonHeaders_RequestID`，校验 32 位十六进制格式及跨请求唯一性；扩展换号重建测试，确认重建后的 Global 聊天请求仍携带合法 `X-Request-ID`。
-
-## 0.14.34
 
 ### Fix — 上游请求透传 host_callback_id，恢复 CPA API REQUEST 日志
 
@@ -25,15 +21,11 @@
 - **修复**：非流式与流式执行入口均提取 `host_callback_id`，经同步 execute、同步 stream collect、异步 stream pump 和换号重试路径透传到 host HTTP wire。
 - 测试：新增 `TestBuildRPCRequestWire_CarriesHostCallbackID`，验证 wire 字段及请求 method/url/body 保持不变。
 
-## 0.14.33
-
 ### Fix — Global 聊天请求补齐 WorkBuddy 客户端识别头
 
 - **根因**：0.14.32 只对齐了 Global 聊天请求 UA，但官方桌面端模型请求还会携带 `X-Tenant-Id` 与 `X-IDE-Type` / `X-IDE-Name` / `X-IDE-Version`；缺少这些客户端标识时，WorkBuddy 管理后台的客户端字段仍为空。
 - **修复**：`backendHeaders()` 在 Global 域增加官方客户端标识头，其中 `X-Tenant-Id` 仅在 `EnterpriseID` 非空时发送；CN 和空域行为保持不变，换号重建请求仍会重新应用同一规则。
 - 测试：扩展 `TestBackendHeaders_ClientIdentityByRealm`，覆盖 Global、无企业 ID、CN、空域，并验证 `rebuildRequestWithSA()` 后客户端标识头仍存在。
-
-## 0.14.32
 
 ### Fix — Global 动态模型发现切换到 /v3/config，补齐 GPT/Gemini 全目录
 
