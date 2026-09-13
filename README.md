@@ -4,7 +4,7 @@
 
 | 插件 | 服务 | 已发布 | 一句话 |
 |---|---|---|---|
-| [`workbuddy/`](workbuddy/) | 腾讯 CodeBuddy（CN + Global） | v0.14.19 | 原生 OAuth provider，积分生命周期 + 每日签到 + 用量 feed |
+| [`workbuddy/`](workbuddy/) | 腾讯 CodeBuddy（CN + Global） | v0.14.32 | 原生 OAuth provider，积分生命周期 + 每日签到 + 用量 feed |
 | [`qoderwork/`](qoderwork/) | QoderWork CN（qoder.com.cn） | v0.9.6 | 双登录 + COSY 签名推理，逆向产物封装（已全量对齐 workbuddy 架构） |
 | [`traework/`](traework/) | TRAE SOLO CN | v0.1.40 | TRAE SOLO 逆向 provider，面板浏览器授权登录 + 长推理流式稳定性 |
 | [`token-usage-tracker/`](token-usage-tracker/) | workbuddy 账户用量 | v0.2.2 | 真实 token 消耗 dashboard，经共享 feed 采集数据 |
@@ -148,7 +148,7 @@ checksums.txt
 CPA 插件商店添加自定义源：
 
 ```text
-https://raw.githubusercontent.com/luode0320/cpa-workbuddy-plugin/main/registry.json
+https://raw.githubusercontent.com/xiuhua-jiang/cpa-workbuddy-plugin/main/registry.json
 ```
 
 然后在商店 UI 安装/更新 **workbuddy-provider**、**qoderwork-provider**、**traework-provider**、**workbuddy-token-usage**。

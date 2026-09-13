@@ -57,7 +57,8 @@ type hostHTTPResponse struct {
 // call; the flat method/url/headers/body fields are an alternate form we don't
 // use (host prefers Request when present).
 type rpcHostHTTPRequestWire struct {
-	Request *rpcHostHTTPInner `json:"request,omitempty"`
+	HostCallbackID string            `json:"host_callback_id,omitempty"`
+	Request        *rpcHostHTTPInner `json:"request,omitempty"`
 }
 
 type rpcHostHTTPInner struct {
@@ -113,6 +114,10 @@ func hostBridgeAvailable() bool {
 // This keeps the plugin functional in dev/test contexts while preferring the
 // compliant path in production.
 func hostHTTPDo(req *http.Request) (*hostHTTPResponse, error) {
+	return hostHTTPDoWithCallback(req, "")
+}
+
+func hostHTTPDoWithCallback(req *http.Request, hostCallbackID string) (*hostHTTPResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("nil request")
 	}
@@ -133,14 +138,7 @@ func hostHTTPDo(req *http.Request) (*hostHTTPResponse, error) {
 	if !hostBridgeAvailable() || runtime.GOOS == "windows" {
 		return hostHTTPDoDirect(req, bodyBytes)
 	}
-	wire := rpcHostHTTPRequestWire{
-		Request: &rpcHostHTTPInner{
-			Method:  req.Method,
-			URL:     req.URL.String(),
-			Headers: map[string][]string(req.Header),
-			Body:    bodyBytes,
-		},
-	}
+	wire := buildRPCRequestWire(req, bodyBytes, hostCallbackID)
 	raw, err := hostCall(pluginabi.MethodHostHTTPDo, mustJSON(wire))
 	if err != nil {
 		// Bridge exists but the call failed — fall back to direct so a transient
@@ -235,6 +233,10 @@ type hostHTTPStream struct {
 // In that case the returned hostHTTPStream wraps an in-memory copy of the
 // full response body so Read/Close have the same shape.
 func hostHTTPDoStream(req *http.Request) (*hostHTTPStream, int, http.Header, error) {
+	return hostHTTPDoStreamWithCallback(req, "")
+}
+
+func hostHTTPDoStreamWithCallback(req *http.Request, hostCallbackID string) (*hostHTTPStream, int, http.Header, error) {
 	if req == nil {
 		return nil, 0, nil, fmt.Errorf("nil request")
 	}
@@ -250,14 +252,7 @@ func hostHTTPDoStream(req *http.Request) (*hostHTTPStream, int, http.Header, err
 	if !hostBridgeAvailable() {
 		return hostHTTPDoStreamDirect(req, bodyBytes)
 	}
-	wire := rpcHostHTTPRequestWire{
-		Request: &rpcHostHTTPInner{
-			Method:  req.Method,
-			URL:     req.URL.String(),
-			Headers: map[string][]string(req.Header),
-			Body:    bodyBytes,
-		},
-	}
+	wire := buildRPCRequestWire(req, bodyBytes, hostCallbackID)
 	raw, err := hostCall(pluginabi.MethodHostHTTPDoStream, mustJSON(wire))
 	if err != nil {
 		return hostHTTPDoStreamDirect(req, bodyBytes)
@@ -274,6 +269,18 @@ func hostHTTPDoStream(req *http.Request) (*hostHTTPStream, int, http.Header, err
 		return nil, resp.StatusCode, http.Header(resp.Headers), fmt.Errorf("host stream bridge unavailable")
 	}
 	return &hostHTTPStream{streamID: resp.StreamID}, resp.StatusCode, http.Header(resp.Headers), nil
+}
+
+func buildRPCRequestWire(req *http.Request, body []byte, hostCallbackID string) rpcHostHTTPRequestWire {
+	return rpcHostHTTPRequestWire{
+		HostCallbackID: hostCallbackID,
+		Request: &rpcHostHTTPInner{
+			Method:  req.Method,
+			URL:     req.URL.String(),
+			Headers: map[string][]string(req.Header),
+			Body:    body,
+		},
+	}
 }
 
 // hostHTTPDoStreamDirect is the test-only fallback: it performs the request

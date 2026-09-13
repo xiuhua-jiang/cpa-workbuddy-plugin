@@ -1,14 +1,54 @@
 # Changelog
 
+## 0.14.36
+
+### Fix — 聊天请求补齐官方 X-Conversation-Request-ID
+
+- **根因**：WorkBuddy 官方模型请求除 `X-Request-ID` 外，还会发送独立的 `X-Conversation-Request-ID`；0.14.35 只补齐了前者，插件仍缺少后一个请求头。
+- **修复**：`backendHeaders()` 为每个聊天完成请求生成 32 位小写十六进制 `X-Conversation-Request-ID`，与 `X-Request-ID` 独立。该头只用于聊天链路，不影响 OAuth、签到等公共请求。
+- 测试：扩展单域及换号重建测试，校验该头格式正确、与 `X-Request-ID` 不同，并在重建请求后仍存在。
+- 说明：后台“请求标识”中的 `crb-` 已确认不是插件生成；本次只补齐官方模型请求头，实际后台显示结果仍需实测确认。
+
+## 0.14.35
+
+### Fix — 上游请求补齐官方 X-Request-ID
+
+- **根因**：WorkBuddy AI 5.5.2 的 `CommonHeaderHttpInterceptor` 会为每个 HTTP 请求生成 `X-Request-ID`；该值为 UUID 去掉连字符后的 32 位小写十六进制，不是带 `crb-` 前缀的标识。插件此前未发送该头，无法完整对齐官方请求链路。
+- **修复**：`commonHeaders()` 为每次请求注入独立的 `X-Request-ID`；非流式、流式和换号重建请求均会自动获得新值，与官方每个实际 HTTP 请求生成一次客户端请求 ID 的行为一致。
+- 测试：新增 `TestCommonHeaders_RequestID`，校验 32 位十六进制格式及跨请求唯一性；扩展换号重建测试，确认重建后的 Global 聊天请求仍携带合法 `X-Request-ID`。
+
+## 0.14.34
+
+### Fix — 上游请求透传 host_callback_id，恢复 CPA API REQUEST 日志
+
+- **根因**：插件调用 `host.http.do` / `host.http.do_stream` 时未在 RPC wire 中携带宿主下发的 `host_callback_id`。CPA 收到回调后无法把上游 HTTP 请求关联回原始 Gin 请求上下文，`RecordAPIRequest()` 静默跳过，导致 request-log 只有 downstream `REQUEST INFO`，没有 `API REQUEST`，无法核对真实上游 Header。
+- **修复**：非流式与流式执行入口均提取 `host_callback_id`，经同步 execute、同步 stream collect、异步 stream pump 和换号重试路径透传到 host HTTP wire。
+- 测试：新增 `TestBuildRPCRequestWire_CarriesHostCallbackID`，验证 wire 字段及请求 method/url/body 保持不变。
+
+## 0.14.33
+
+### Fix — Global 聊天请求补齐 WorkBuddy 客户端识别头
+
+- **根因**：0.14.32 只对齐了 Global 聊天请求 UA，但官方桌面端模型请求还会携带 `X-Tenant-Id` 与 `X-IDE-Type` / `X-IDE-Name` / `X-IDE-Version`；缺少这些客户端标识时，WorkBuddy 管理后台的客户端字段仍为空。
+- **修复**：`backendHeaders()` 在 Global 域增加官方客户端标识头，其中 `X-Tenant-Id` 仅在 `EnterpriseID` 非空时发送；CN 和空域行为保持不变，换号重建请求仍会重新应用同一规则。
+- 测试：扩展 `TestBackendHeaders_ClientIdentityByRealm`，覆盖 Global、无企业 ID、CN、空域，并验证 `rebuildRequestWithSA()` 后客户端标识头仍存在。
+
 ## 0.14.32
 
 ### Fix — Global 动态模型发现切换到 /v3/config，补齐 GPT/Gemini 全目录
 
 - **根因**：Global realm 的动态发现一直请求 `workbuddy.ai/console/enterprises/personal/models`，该端点对 Global token 恒返回 500（APISIX 500），插件静默回落到静态兜底列表——静态列表里没有 GPT 系列，导致 Global 账号永远看不到 `gpt-6-astra` / `gpt-5.6-sol|terra|luna` / `gpt-5.5` / `gpt-5.4` / `gpt-5.3-codex` / `gemini-3.5-flash`。
 - **修复**：对齐桌面端真实行为——Global 模型目录改走 `GET workbuddy.ai/v3/config`（带 Authorization 时返回完整 `{models, agents[cli].models}`，共 21 个模型，与 WorkBuddy AI 5.5.2 桌面端模型下拉框一致）；CN 继续走 `/console/enterprises/personal/models`（该端点对 CN token 正常）。
-- **UA 门禁**：`/v3/config` 带鉴权时会校验 UA 中的 copilot 版本（缺失返回 12403 `check ua, get coding copilot version error`），Global 发现请求使用 `WorkBuddy/5.5.2` UA；普通 chat 请求 UA 不变。
+- **UA 门禁**：`/v3/config` 带鉴权时会校验 UA 中的 copilot 版本（缺失返回 12403 `check ua, get coding copilot version error`），Global 发现请求使用 `WorkBuddy/5.5.2` UA；普通 chat 请求的 UA 修复见下一节。
 - **解析复用**：`/v3/config` 的 models 条目字段（`maxInputTokens` / `maxOutputTokens` / `maxAllowedSize`）与 console 端点一致，直接复用 `parseModelsAPIResponse`，无新增解析分支。
 - **contextWindow 兼容**：`/v3/config` 返回的 `contextWindow` 为对象 `{"defaultLength":N,"supportedLengths":[...]}` 而非裸数字，导致首版解析失败（`cannot unmarshal object into ... int64`）；新增 `upstreamContextWindow` 自定义 Unmarshal，同时兼容裸数字与对象形态（取 `defaultLength`）。
+
+### Fix — Global 聊天请求对齐 WorkBuddy 桌面端 User-Agent
+
+- **根因**：Global 聊天请求继续使用 CN 的 `CLI/2.63.2 CodeBuddy/2.63.2`，WorkBuddy 管理后台无法将 CPA 流量识别为 WorkBuddy 客户端，客户端字段为空。
+- **修复**：`backendHeaders()` 仅在 Global 域将聊天请求 UA 覆盖为 `workbuddy-ai/5.5.2 workbuddy-ai/5.5.2 CLI/2.137.1`；CN 和空域继续使用原 `clientUA`，换号重建请求同样保持该规则。
+- 测试：新增 `TestBackendHeaders_UserAgentByRealm` 与 `TestRebuildRequestWithSA_GlobalUserAgent`，覆盖 CN、空域、Global 及换号重建路径。
+- 验证：cgo-shim build+vet+test 全绿。
 
 ## 0.14.31
 

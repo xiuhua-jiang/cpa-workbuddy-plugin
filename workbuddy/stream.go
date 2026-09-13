@@ -69,7 +69,7 @@ func streamHeaders() http.Header {
 // the outbound call and host transport policy applies. The host bridge emits
 // arbitrary 32KB chunks, so we adapt to io.Reader and keep the bufio.Scanner
 // SSE line framing unchanged.
-func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID string, started time.Time, authID, reasoningEffort, accountLabel, sessionKey string) {
+func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID string, started time.Time, authID, reasoningEffort, accountLabel, sessionKey, hostCallbackID string) {
 	// Always close the host stream exactly once on every exit path.
 	closed := false
 	closeOnce := func() {
@@ -94,7 +94,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	curAccountLabel := accountLabel
 
 	for attempt := 0; attempt <= budget; attempt++ {
-		stream, statusCode, _, err := hostHTTPDoStream(curReq)
+		stream, statusCode, _, err := hostHTTPDoStreamWithCallback(curReq, hostCallbackID)
 		if err != nil {
 			publishUsage(requestedModel, upstreamModel, curAuthUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, curAccountLabel, sessionKey)
 			noteAccountFailure(curAuthID, 0, err.Error())
@@ -260,14 +260,14 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 // can route around a per-account rate limit without waiting for the fixed
 // 15s cooldown to expire; cross-request cooldown continues to apply
 // via isAccountFailure / recordAccountFailure on the failing account.
-func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector, hostCallbackID string) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	budget := loadedRetryOn4xx()
 	curSA := sa
 	var lastStatus int
 	var lastErr error
 
 	for attempt := 0; attempt <= budget; attempt++ {
-		chunks, statusCode, errOnce := collectUpstreamStreamOnce(body, curSA, sseFramed, collector)
+		chunks, statusCode, errOnce := collectUpstreamStreamOnce(body, curSA, sseFramed, collector, hostCallbackID)
 		if errOnce == nil {
 			return chunks, statusCode, nil
 		}
@@ -308,14 +308,14 @@ func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collecto
 // against sa: build the request, route via host.http.do_stream, decide
 // success vs 4xx/5xx. Pulled out of collectUpstreamStream so the retry
 // loop can rebuild the request against a different account on failure.
-func collectUpstreamStreamOnce(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+func collectUpstreamStreamOnce(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector, hostCallbackID string) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 	backendHeaders(httpReq, sa)
 	// Compliance: route via host.http.do_stream so request-log captures the call.
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
+	stream, statusCode, _, err := hostHTTPDoStreamWithCallback(httpReq, hostCallbackID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("http_error: %w", err)
 	}
@@ -341,13 +341,13 @@ func collectUpstreamStreamOnce(body []byte, sa *storedAuth, sseFramed bool, coll
 // request against a different account on failure. Returns a non-nil error
 // in the canonical "upstream N: ..." or "http_error: ..." shape that
 // parseUpstreamStatusFromErr understands.
-func doExecuteOnce(body []byte, sa *storedAuth, requestedModel string) ([]byte, error) {
+func doExecuteOnce(body []byte, sa *storedAuth, requestedModel, hostCallbackID string) ([]byte, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	backendHeaders(httpReq, sa)
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
+	stream, statusCode, _, err := hostHTTPDoStreamWithCallback(httpReq, hostCallbackID)
 	if err != nil {
 		return nil, fmt.Errorf("http_error: %w", err)
 	}

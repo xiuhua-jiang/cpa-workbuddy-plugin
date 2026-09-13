@@ -60,6 +60,8 @@ import "C"
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -83,6 +85,10 @@ const (
 	// copilot.tencent.com rejects Global JWTs with 401; must use workbuddy.ai.
 	upstreamBaseGlobal = "https://www.workbuddy.ai"
 	clientUA           = "CLI/2.63.2 CodeBuddy/2.63.2"
+	// clientUAGlobal 与 WorkBuddy AI 桌面端保持一致
+	clientUAGlobal      = "workbuddy-ai/5.5.2 workbuddy-ai/5.5.2 CLI/2.137.1"
+	clientIDEGlobal     = "WorkBuddy"
+	clientVersionGlobal = "5.5.2"
 	// modelsGlobalUA is the User-Agent accepted by the Global model-catalog
 	// endpoint (workbuddy.ai/v3/config). The gateway extracts a "copilot
 	// version" from the UA and rejects requests missing it (code 12403).
@@ -340,7 +346,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.14.31"
+var version = "0.14.32"
 
 func wbRegistration() registration {
 	return registration{
@@ -519,9 +525,20 @@ func commonHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-Request-ID", newRequestID())
 	req.Header.Set("Origin", originReferer)
 	req.Header.Set("Referer", originReferer+"/")
 	req.Header.Set("User-Agent", clientUA)
+}
+
+// newRequestID matches the official desktop client: a UUID without hyphens,
+// represented as 32 lowercase hexadecimal characters.
+func newRequestID() string {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return fmt.Sprintf("%032x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(id[:])
 }
 
 // originRefererFor returns the Origin/Referer base URL appropriate for the
@@ -560,6 +577,8 @@ func endpointModelsFor(sa *storedAuth) string {
 // Empty fields are signalled via the X-No-* convention used by CodeBuddy.
 func backendHeaders(req *http.Request, sa *storedAuth) {
 	commonHeaders(req)
+	// Official model requests carry this separately from X-Request-ID.
+	req.Header.Set("X-Conversation-Request-ID", newRequestID())
 	if sa.Auth.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
 	} else {
@@ -590,6 +609,16 @@ func backendHeaders(req *http.Request, sa *storedAuth) {
 	origin := originRefererFor(sa)
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Referer", origin+"/")
+	if isGlobalDomain(sa.Auth.Domain) {
+		// Global 管理后台按官方桌面端 UA 识别客户端；CN 保持原 UA。
+		req.Header.Set("User-Agent", clientUAGlobal)
+		if sa.Account.EnterpriseID != "" {
+			req.Header.Set("X-Tenant-Id", sa.Account.EnterpriseID)
+		}
+		req.Header.Set("X-IDE-Type", clientIDEGlobal)
+		req.Header.Set("X-IDE-Name", clientIDEGlobal)
+		req.Header.Set("X-IDE-Version", clientVersionGlobal)
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -681,8 +710,13 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi
 
 // -----------------------------------------------------------------------------
 
+type executorExecuteRequest struct {
+	pluginapi.ExecutorRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
 func handleExecExecute(raw []byte) ([]byte, error) {
-	var req pluginapi.ExecutorRequest
+	var req executorExecuteRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
@@ -739,7 +773,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		usedAuthID    = req.AuthID
 	)
 	for attempt := 0; attempt <= budget; attempt++ {
-		completion, completionErr = doExecuteOnce(curBody, curSA, req.Model)
+		completion, completionErr = doExecuteOnce(curBody, curSA, req.Model, req.HostCallbackID)
 		if completionErr == nil {
 			authUID = curSA.Account.UID
 			accountLabel = strings.TrimSpace(curSA.Account.Nickname)
@@ -846,7 +880,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	// No async stream id → fall back to synchronous chunk collection.
 	if req.StreamID == "" {
 		collector := &sseUsageCollector{}
-		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector)
+		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, req.HostCallbackID)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error(), reasoningEffort, collector.ttftNS(started), accountLabel, sessionKey)
 			// statusCode >= 400 already went through reconcileByUID inside
@@ -877,7 +911,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		return okEnvelope(streamResponse{Headers: headers})
 	}
 	backendHeaders(httpReq, sa)
-	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, accountLabel, sessionKey)
+	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, accountLabel, sessionKey, req.HostCallbackID)
 	return okEnvelope(streamResponse{Headers: headers})
 }
 

@@ -2,8 +2,42 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 )
+
+func TestBuildRPCRequestWire_CarriesHostCallbackID(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Test", "value")
+
+	wire := buildRPCRequestWire(req, []byte(`{"hello":"world"}`), "callback-123")
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
+	}
+	if got["host_callback_id"] != "callback-123" {
+		t.Fatalf("host_callback_id = %v, want callback-123", got["host_callback_id"])
+	}
+	inner, ok := got["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("request = %T, want object", got["request"])
+	}
+	if inner["method"] != http.MethodPost || inner["url"] != "https://example.test/v1/chat" {
+		t.Fatalf("request = %#v, want method/url preserved", inner)
+	}
+	if inner["body"] != "eyJoZWxsbyI6IndvcmxkIn0=" {
+		t.Fatalf("request body = %v, want base64-encoded body", inner["body"])
+	}
+}
 
 // Regression: the host serializes pluginapi.HTTPResponse WITHOUT json tags
 // (v7.2.x), so the wire shape is PascalCase {"StatusCode":200,...}. The old
